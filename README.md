@@ -6,6 +6,9 @@
 
 # WildDet3D:<br> Scaling Promptable 3D Detection in the Wild
 
+<a href="https://allenai.org/papers/wilddet3d" target="_blank">
+    <img alt="Paper" src="https://img.shields.io/badge/Paper-WildDet3D-red" height="25" />
+</a>
 <a href="https://huggingface.co/allenai/WildDet3D" target="_blank">
     <img alt="HF Model: WildDet3D" src="https://img.shields.io/badge/%F0%9F%A4%97%20_Model-WildDet3D-ffc107?color=ffc107&logoColor=white" height="25" />
 </a>

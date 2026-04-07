@@ -113,12 +113,12 @@
 <td align="center">
 <b>Meta Quest</b>
 <br>3D detection in AR/VR
-<br><a href="demo/meta_quest/README.md">README</a>
+<br><a href="assets/demo_meta_quest.mp4">Video</a> | <a href="demo/meta_quest/README.md">README</a>
 </td>
 <td align="center">
 <b>Robotics</b>
 <br>3D perception for robotic manipulation
-<br><a href="demo/robotics/README.md">README</a>
+<br><a href="assets/demo_robotics.mp4">Video</a> | <a href="demo/robotics/README.md">README</a>
 </td>
 </tr>
 </table>

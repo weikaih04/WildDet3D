@@ -167,7 +167,7 @@ from PIL import Image
 
 # Build model
 model = build_model(
-    checkpoint="ckpt/wilddet3d.pt",
+    checkpoint="ckpt/wilddet3d_alldata_all_prompt_v1.0.pt",
     score_threshold=0.3,
     skip_pretrained=True,
 )
@@ -199,7 +199,7 @@ results = model(
     prompt_text="geometric",
 )
 
-# Box prompt (visual): find all similar objects (one-to-many)
+# Exemplar prompt: use a 2D box as visual exemplar, find all similar objects (one-to-many)
 results = model(
     images=data["images"].cuda(),
     intrinsics=data["intrinsics"].cuda()[None],
@@ -207,7 +207,7 @@ results = model(
     original_hw=[data["original_hw"]],
     padding=[data["padding"]],
     input_boxes=[[100, 200, 300, 400]],
-    prompt_text="visual: car",
+    prompt_text="visual",
 )
 
 # Point prompt
@@ -217,7 +217,7 @@ results = model(
     input_hw=[data["input_hw"]],
     original_hw=[data["original_hw"]],
     padding=[data["padding"]],
-    input_points=[[(150, 250, 1), (200, 300, 0)]],  # (x, y, label)
+    input_points=[[(150, 250, 1), (200, 300, 0)]],  # (x, y, label): 1=positive, 0=negative
     prompt_text="geometric",
 )
 
@@ -234,6 +234,10 @@ draw_3d_boxes(
     save_path="output.png",
 )
 ```
+
+**Notes:**
+- If `intrinsics` is `None`, the model predicts intrinsics internally (for in-the-wild images without known camera parameters).
+- Optional depth input: pass `depth_gt=depth_tensor` (shape `(B, 1, H, W)`, meters) for improved 3D localization with sparse/dense depth (e.g., LiDAR).
 
 See **[docs/INFERENCE.md](docs/INFERENCE.md)** for the full API reference.
 

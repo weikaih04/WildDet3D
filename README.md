@@ -1,10 +1,10 @@
 <div align="center">
-  <a href="https://youtu.be/RgHKmOqb7I4">
-    <img src="assets/wilddet3d_banner.svg" alt="WildDet3D" width="800" style="margin-left:'auto' margin-right:'auto' display:'block'"/>
-  </a>
+  <img src="assets/wilddet3d_banner.svg" alt="WildDet3D" width="800" style="margin-left:'auto' margin-right:'auto' display:'block'"/>
   <br>
 
 # WildDet3D:<br> Scaling Promptable 3D Detection in the Wild
+
+<a href="https://youtu.be/RgHKmOqb7I4">Watch the full demo video</a>
 
 <a href="https://huggingface.co/allenai/WildDet3D" target="_blank">
     <img alt="HF Model: WildDet3D" src="https://img.shields.io/badge/%F0%9F%A4%97%20_Model-WildDet3D-ffc107?color=ffc107&logoColor=white" height="25" />

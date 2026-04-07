@@ -19,6 +19,9 @@
 <a href="https://apps.apple.com/us/app/wilddet3d/id6760861157" target="_blank">
     <img alt="iPhone App" src="https://img.shields.io/badge/App_Store-WildDet3D-blue?logo=apple&logoColor=white" height="25" />
 </a>
+<a href="https://allenai.org/blog/wilddet3d" target="_blank">
+    <img alt="Blog" src="https://img.shields.io/badge/Blog-WildDet3D-green" height="25" />
+</a>
 
 <p style="width:80%; margin:auto">
     <a href="https://weikaih04.github.io/" target="_blank">Weikai Huang</a><sup style="color:#F26035">&#9829;</sup><sup>1,2</sup>&nbsp;&nbsp;

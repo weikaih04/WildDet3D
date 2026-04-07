@@ -103,10 +103,10 @@
 <tr><td colspan="2"></td></tr>
 <tr>
 <td align="center">
-<a href="demo/meta_quest/README.md"><img src="assets/demo_meta_quest.png" height="200"></a>
+<a href="demo/meta_quest/README.md"><img src="assets/demo_meta_quest.gif" height="200"></a>
 </td>
 <td align="center">
-<a href="demo/robotics/README.md"><img src="assets/demo_robotics.png" height="200"></a>
+<a href="demo/robotics/README.md"><img src="assets/demo_robotics.gif" height="200"></a>
 </td>
 </tr>
 <tr>

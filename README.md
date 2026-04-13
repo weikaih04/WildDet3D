@@ -385,10 +385,14 @@ The dataset is hosted on HuggingFace: [allenai/WildDet3D-Data](https://huggingfa
 If you find this work useful, please cite:
 
 ```bibtex
-@article{wilddet3d2026,
-    title={WildDet3D: Scaling Promptable 3D Detection in the Wild},
-    author={Huang, Weikai and Zhang, Jieyu and Li, Sijun and Jia, Taoyang and Duan, Jiafei and Cheng, Yunqian and Cho, Jaemin and Wallingford, Matthew and Soraki, Rustin and Kim, Chris Dongjoo and Liu, Shuo and Clay, Donovan and Anderson, Taira and Han, Winson and Farhadi, Ali and Hariharan, Bharath and Ren, Zhongzheng and Krishna, Ranjay},
-    year={2026},
+@misc{huang2026wilddet3dscalingpromptable3d,
+      title={WildDet3D: Scaling Promptable 3D Detection in the Wild}, 
+      author={Weikai Huang and Jieyu Zhang and Sijun Li and Taoyang Jia and Jiafei Duan and Yunqian Cheng and Jaemin Cho and Mattew Wallingford and Rustin Soraki and Chris Dongjoo Kim and Donovan Clay and Taira Anderson and Winson Han and Ali Farhadi and Bharath Hariharan and Zhongzheng Ren and Ranjay Krishna},
+      year={2026},
+      eprint={2604.08626},
+      archivePrefix={arXiv},
+      primaryClass={cs.CV},
+      url={https://arxiv.org/abs/2604.08626}, 
 }
 ```
 

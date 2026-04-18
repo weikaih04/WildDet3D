@@ -1,4 +1,11 @@
-# Core
+# NOTE: Install torch, vis4d, and vis4d_cuda_ops BEFORE running `pip install -r requirements.txt`.
+# See README.md -> Installation for the full sequence.
+#
+#   pip install torch==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cu121
+#   pip install vis4d==1.0.0
+#   pip install git+https://github.com/SysCV/vis4d_cuda_ops.git --no-build-isolation --no-cache-dir
+
+# Core (torch/torchvision are pinned above; kept here as a soft floor)
 torch==2.5.1
 torchvision==0.20.1
 numpy
@@ -8,11 +15,25 @@ Pillow
 einops
 timm
 transformers
-utils3d
+# PyPI's utils3d==0.1.0 is an unrelated stub package. The real one
+# (EasternJournalist/utils3d, exposes utils3d.pt.* / utils3d.np.*) only
+# ships from GitHub.
+utils3d @ git+https://github.com/EasternJournalist/utils3d.git
 huggingface_hub
+
+# third_party/sam3 transitive deps (sam3 is loaded via sys.path, not pip-installed)
+ftfy==6.1.1
+regex
+iopath>=0.1.10
+typing_extensions
+# sam3/model_builder.py still imports pkg_resources, which was removed from setuptools 80+
+setuptools<80
 
 # Depth backend
 opencv-python
+
+# Visualization
+matplotlib
 
 # Eval
 pycocotools
@@ -22,5 +43,5 @@ terminaltables
 ml_collections
 tqdm
 
-# vis4d framework (for training and eval)
-vis4d
+# Training data prep (Waymo v2 is parquet-backed; CA1M tar processing)
+pyarrow

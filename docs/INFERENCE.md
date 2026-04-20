@@ -9,10 +9,10 @@ WildDet3D supports 5 prompt modes for 3D object detection:
 | **Text** | `input_texts=["car", "person"]` | Detect all instances of given categories | Open-vocabulary detection |
 | **Visual** | `input_boxes` + `prompt_text="visual"` | Use box as visual example, find similar objects | One-to-many matching |
 | **Visual+Label** | `input_boxes` + `prompt_text="visual: car"` | Visual example with category constraint | Filtered one-to-many |
-| **Geometric** | `input_boxes` + `prompt_text="geometric"` | Lift the given 2D box to 3D | One-to-one, box prompt |
-| **Geometric+Label** | `input_boxes` + `prompt_text="geometric: car"` | Lift 2D box to 3D with category label | One-to-one with label |
+| **Geometric** | `input_boxes` + `prompt_text="geometric"` | Lift the given 2D box to 3D | **One-to-one**, box prompt |
+| **Geometric+Label** | `input_boxes` + `prompt_text="geometric: car"` | Lift 2D box to 3D with category label | **One-to-one** with label |
 
-Point prompts (`input_points`) work the same way as box prompts with all prompt_text modes.
+Point prompts (`input_points`) work with any `prompt_text`. In `geometric` mode they are also one-to-one (the single output is the proposal whose box contains the most positive points, tie-broken by score).
 
 ## Setup
 
@@ -25,12 +25,24 @@ from PIL import Image
 model = build_model(
     checkpoint="ckpt/wilddet3d.pt",
     score_threshold=0.3,
-    skip_pretrained=True,  # faster loading from full checkpoint
+    score_3d_threshold=0.1,
+    skip_pretrained=True,       # faster loading from full checkpoint
+    # use_depth_input_test=True,  # enable ONLY if you will pass `depth_gt`
 )
 
 # Load and preprocess image
 image = np.array(Image.open("image.jpg")).astype(np.float32)
-data = preprocess(image, intrinsics=None)  # None = use predicted intrinsics
+
+# Option A: unknown intrinsics (model uses its predicted K internally)
+data = preprocess(image, intrinsics=None)
+
+# Option B: known camera intrinsics
+# intrinsics = np.load("intrinsics.npy")  # (3, 3)
+# data = preprocess(image, intrinsics)
+
+# Option C: known intrinsics AND a measured depth map
+# depth = np.load("depth.npy")  # (H, W) float32 meters, same resolution as image
+# data = preprocess(image, intrinsics, depth=depth)
 ```
 
 ## `build_model()` Parameters
@@ -38,29 +50,49 @@ data = preprocess(image, intrinsics=None)  # None = use predicted intrinsics
 | Parameter | Default | Description |
 |---|---|---|
 | `checkpoint` | (required) | Path to WildDet3D `.ckpt` file |
-| `sam3_checkpoint` | `"pretrained/sam3/sam3_detector.pt"` | Path to SAM3 pretrained weights |
-| `score_threshold` | `0.3` | Confidence threshold for filtering detections |
-| `nms` | `True` | Whether to apply NMS |
+| `sam3_checkpoint` | `"pretrained/sam3/sam3_detector.pt"` | SAM3 pretrained weights (ignored when `skip_pretrained=True`) |
+| `score_threshold` | `0.3` | 2D score floor for text / visual prompts (see [Score Filtering](#score-filtering)) |
+| `score_3d_threshold` | `0.1` | 3D score floor for text / visual prompts |
+| `nms` | `True` | Apply NMS on 2D boxes before the score filter |
 | `iou_threshold` | `0.6` | IoU threshold for NMS |
 | `device` | `"cuda"` | Device to load model on |
-| `skip_pretrained` | `False` | Skip loading SAM3/LingBot pretrained weights (faster if checkpoint has everything) |
-| `use_predicted_intrinsics` | `False` | Use predicted intrinsics for 3D decoding (for in-the-wild images without GT K) |
+| `backbone_freeze_blocks` | `28` | SAM3 ViT blocks to freeze (not relevant for inference) |
+| `lingbot_encoder_freeze_blocks` | `21` | LingBot-Depth encoder blocks frozen (not relevant for inference) |
+| `ambiguous_rotation` | `False` | Use ambiguous (sin/cos) rotation head |
 | `canonical_rotation` | `False` | Use canonical rotation representation |
+| `use_depth_input_test` | `False` | If `True`, the geometry backend consumes a measured depth input in addition to the image |
+| `use_predicted_intrinsics` | `False` | Use predicted K (ignore the passed intrinsics) |
+| `skip_pretrained` | `False` | Build model without loading SAM3 / LingBot weights; use this when the full checkpoint already contains them |
 
 ## `preprocess()` Parameters
 
 | Parameter | Default | Description |
 |---|---|---|
-| `image` | (required) | RGB image as numpy array `(H, W, 3)`, dtype `float32` |
-| `intrinsics` | `None` | Camera intrinsics `(3, 3)`. If `None`, a default is created and predicted intrinsics are used at inference. |
+| `image` | (required) | RGB image as numpy array `(H, W, 3)`. Any numeric dtype; cast to `float32` internally. |
+| `intrinsics` | `None` | Camera intrinsics `(3, 3)`. `None` creates a placeholder; the model then uses its predicted K. |
+| `depth` | `None` | Optional depth map `(H, W)`, values in **metres**, same resolution as `image`. When provided, the depth is resized + center-padded to the model's `input_hw` using the same `ResizeDepthMaps(nearest)` + `CenterPadDepthMaps` transforms eval uses, and the result is returned under `data["depth_gt"]`. |
 
-Returns a dict with keys: `images`, `intrinsics`, `input_hw`, `original_hw`, `padding`, `original_images`, `original_intrinsics`.
+Returned dict keys:
+
+| Key | Shape / type | Always? |
+|---|---|---|
+| `images` | `Tensor (1, 3, 1008, 1008)` | yes |
+| `intrinsics` | `Tensor (3, 3)` — K for `input_hw` space | yes |
+| `original_intrinsics` | `Tensor (3, 3)` — K for the original image | yes |
+| `input_hw` | `(1008, 1008)` | yes |
+| `original_hw` | `(H, W)` of the input image | yes |
+| `padding` | `(left, right, top, bottom)` | yes |
+| `depth_gt` | `Tensor (1, 1, 1008, 1008)` metres | **only when `depth=` passed** |
+
+## Input coordinates
+
+User-supplied `input_boxes` and `input_points` are in **original-image pixel coordinates**, not `input_hw`. The wrapper applies the same resize + pad transform preprocess applied to the image, so the prompt lines up with the model's view. The predicted 2D boxes returned in the output are likewise in original-image pixels.
 
 ## Prompt Modes
 
-### 1. Text Prompt
+All four examples below use the same `data` dict from [Setup](#setup). Add `depth_gt=data["depth_gt"].cuda()` to any call if you preprocessed with `depth=`.
 
-Detect all instances of given text categories.
+### 1. Text Prompt (one-to-many per class)
 
 ```python
 results = model(
@@ -70,13 +102,12 @@ results = model(
     original_hw=[data["original_hw"]],
     padding=[data["padding"]],
     input_texts=["car", "person", "bicycle"],
+    # depth_gt=data["depth_gt"].cuda(),  # include only if preprocess was called with depth=...
 )
 boxes, boxes3d, scores, scores_2d, scores_3d, class_ids, depth_maps = results
 ```
 
-### 2. Visual Prompt (Box, one-to-many)
-
-Use a 2D box as a visual example to find all similar objects in the image.
+### 2. Visual Prompt — Box as exemplar, one-to-many
 
 ```python
 results = model(
@@ -85,71 +116,101 @@ results = model(
     input_hw=[data["input_hw"]],
     original_hw=[data["original_hw"]],
     padding=[data["padding"]],
-    input_boxes=[[100, 200, 300, 400]],  # pixel xyxy
-    prompt_text="visual",
-)
-boxes, boxes3d, scores, scores_2d, scores_3d, class_ids, depth_maps = results
-```
-
-### 3. Visual+Label Prompt (Box + category, one-to-many)
-
-Same as visual but with a category constraint.
-
-```python
-results = model(
-    ...,
-    input_boxes=[[100, 200, 300, 400]],
-    prompt_text="visual: car",
+    input_boxes=[[100, 200, 300, 400]],  # pixel xyxy in the original image
+    prompt_text="visual",                 # or "visual: car" for a label-constrained version
+    # depth_gt=data["depth_gt"].cuda(),
 )
 ```
 
-### 4. Geometric Prompt (Box, one-to-one)
+### 3. Geometric Prompt — Box, one-to-one
 
-Lift a specific 2D bounding box to a 3D bounding box.
+Returns **exactly one** prediction per input box: the proposal with the highest 2D score among the top-10 by IoU with the prompt box. Falls back to overall argmax when no proposal overlaps the prompt.
 
 ```python
 results = model(
-    ...,
+    images=data["images"].cuda(),
+    intrinsics=data["intrinsics"].cuda()[None],
+    input_hw=[data["input_hw"]],
+    original_hw=[data["original_hw"]],
+    padding=[data["padding"]],
     input_boxes=[[100, 200, 300, 400]],
+    prompt_text="geometric",              # or "geometric: car"
+    # depth_gt=data["depth_gt"].cuda(),
+)
+```
+
+### 4. Point Prompt
+
+Each point is `(x, y, label)` where `label=1` is positive, `label=0` is negative. In `prompt_text="geometric"` mode, point prompts are also one-to-one — the output is the proposal whose 2D box contains the most positive points, tie-broken by score.
+
+```python
+results = model(
+    images=data["images"].cuda(),
+    intrinsics=data["intrinsics"].cuda()[None],
+    input_hw=[data["input_hw"]],
+    original_hw=[data["original_hw"]],
+    padding=[data["padding"]],
+    input_points=[[(150, 250, 1), (200, 300, 0)]],
     prompt_text="geometric",
+    # depth_gt=data["depth_gt"].cuda(),
 )
 ```
 
-### 5. Geometric+Label Prompt (Box + category, one-to-one)
+## Using a measured depth map
+
+Providing a GT depth (LiDAR / stereo / etc.) needs **three things set together**:
 
 ```python
+# 1. Preprocess the image with the depth map (meters, (H, W), same res as image).
+data = preprocess(image, intrinsics, depth=depth_np)
+
+# 2. Build the model with the depth input path enabled.
+model = build_model(
+    checkpoint="ckpt/wilddet3d.pt",
+    skip_pretrained=True,
+    use_depth_input_test=True,   # <-- required when passing depth_gt below
+)
+
+# 3. Pass depth_gt to every model(...) call.
 results = model(
-    ...,
-    input_boxes=[[100, 200, 300, 400]],
-    prompt_text="geometric: car",
+    images=data["images"].cuda(),
+    intrinsics=data["intrinsics"].cuda()[None],
+    input_hw=[data["input_hw"]],
+    original_hw=[data["original_hw"]],
+    padding=[data["padding"]],
+    input_texts=["car", "person"],
+    depth_gt=data["depth_gt"].cuda(),
 )
 ```
 
-### Point Prompts
+Omit all three for monocular inference (the model predicts depth internally via LingBot-Depth).
 
-Point prompts work with any `prompt_text` mode. Each point is `(x, y, label)` where label is 1 (positive) or 0 (negative).
+## Score Filtering
 
-```python
-results = model(
-    ...,
-    input_points=[[(150, 250, 1), (200, 300, 0)]],  # pixel coords
-    prompt_text="geometric",
-)
-```
+Two thresholds apply for text / visual prompts (geometric returns 1 pred per prompt regardless):
+
+| Threshold | Applied to | Default |
+|---|---|---|
+| `score_threshold` | combined 2D × 3D score | `0.3` |
+| `score_3d_threshold` | standalone 3D confidence | `0.1` |
+
+Both are set via `build_model(...)`. Pass `0.0` to disable a floor.
 
 ## Output Format
 
-All outputs are **per-image lists**:
+All outputs are **per-image lists** (outer list has length `B = number of prompts / batch elements`):
 
 | Output | Shape | Description |
 |---|---|---|
-| `boxes` | `list[Tensor[N, 4]]` | 2D bounding boxes in **pixel xyxy** (original image space) |
-| `boxes3d` | `list[Tensor[N, 10]]` | 3D bounding boxes (center_x, center_y, center_z, w, h, l, rot_6d) |
-| `scores` | `list[Tensor[N]]` | Combined confidence scores |
+| `boxes` | `list[Tensor[N, 4]]` | 2D boxes in pixel xyxy (**original image space**) |
+| `boxes3d` | `list[Tensor[N, 10]]` | 3D boxes (center_x, center_y, center_z, w, h, l, q_w, q_x, q_y, q_z) in camera coords, metres |
+| `scores` | `list[Tensor[N]]` | Combined confidence |
 | `scores_2d` | `list[Tensor[N]]` | 2D detection confidence |
 | `scores_3d` | `list[Tensor[N]]` | 3D detection confidence |
-| `class_ids` | `list[Tensor[N]]` | Class indices (into `input_texts` or prompt order) |
-| `depth_maps` | `list[Tensor[1, H, W]]` | Predicted metric depth maps (meters) |
+| `class_ids` | `list[Tensor[N]]` | Class indices (into `input_texts`, or prompt order for box / point prompts) |
+| `depth_maps` | `list[Tensor[1, H, W]]` or `None` | Predicted metric depth in metres |
+
+`N` varies per image: in text / visual modes it reflects score-threshold filtering + NMS; in geometric modes `N == 1` per prompt.
 
 ### Getting Predicted Intrinsics
 
@@ -159,41 +220,64 @@ results = model(
     input_texts=["car"],
     return_predicted_intrinsics=True,
 )
-boxes, boxes3d, scores, scores_2d, scores_3d, class_ids, depth_maps, predicted_K = results
-# predicted_K: Tensor[B, 3, 3] predicted camera intrinsics
+boxes, boxes3d, scores, scores_2d, scores_3d, class_ids, depth_maps, predicted_K, confidence_maps = results
+# predicted_K: Tensor[B, 3, 3], confidence_maps: Tensor[B, 1, H, W]
 ```
 
 ## Visualization
 
-Draw 3D bounding boxes with 2D/3D scores on the original image:
+`draw_3d_boxes` renders 3D wireframes on the **original image** and projects 3D corners via the original-image intrinsics. Pass `data["original_intrinsics"].numpy()` (or the same `intrinsics` you fed to `preprocess`).
 
 ```python
 from wilddet3d.vis.visualize import draw_3d_boxes
 
-# After running inference
 boxes, boxes3d, scores, scores_2d, scores_3d, class_ids, depth_maps = results
 
 draw_3d_boxes(
-    image=image.astype(np.uint8),     # original RGB image (H, W, 3)
-    boxes3d=boxes3d[0],               # 3D boxes for first image
-    intrinsics=intrinsics,            # camera intrinsics (3, 3)
-    scores_2d=scores_2d[0],           # 2D confidence
-    scores_3d=scores_3d[0],           # 3D confidence
-    class_ids=class_ids[0],           # class indices
-    class_names=["car", "person"],    # category names
-    line_width=2,                     # 3D box edge width
-    font_size=13,                     # label font size
-    save_path="output.png",           # save to file
+    image=image.astype(np.uint8),          # original RGB (H, W, 3)
+    boxes3d=boxes3d[0],
+    intrinsics=data["original_intrinsics"].numpy(),
+    scores_2d=scores_2d[0],
+    scores_3d=scores_3d[0],
+    class_ids=class_ids[0],
+    class_names=["car", "person", "bicycle"],
+    score_2d_threshold=0.3,                # drop rows below this 2D score (0 disables)
+    score_3d_threshold=0.1,                # drop rows below this 3D score (0 disables)
+    save_path="output.png",
+    # Optional debug overlays (both default off):
+    #   predicted 2D boxes (green):
+    # boxes_2d=boxes[0],
+    # draw_predicted_2d_boxes=True,
+    #   user prompt boxes (red) / points (red pos, gray neg):
+    # input_boxes=[[100, 200, 300, 400]],
+    # input_points=[[(150, 250, 1)]],
+    # draw_prompt=True,
 )
 ```
+
+### `draw_3d_boxes()` Parameters
+
+| Parameter | Default | Description |
+|---|---|---|
+| `image` | (required) | RGB `(H, W, 3)` uint8 — the original image |
+| `boxes3d` | (required) | `(N, 10)` tensor/array — camera-frame 3D boxes |
+| `intrinsics` | (required) | `(3, 3)` — original-image K (i.e. `data["original_intrinsics"]`) |
+| `scores_2d`, `scores_3d`, `class_ids` | `None` | `(N,)` — used for labels and the score filter |
+| `class_names` | `None` | List of class names |
+| `line_width`, `font_size`, `n_colors`, `score_format`, `near_clip` | sane defaults | 3D wireframe / label rendering knobs |
+| `score_2d_threshold` | `0.3` | Drop rows below this 2D score (`0` disables) |
+| `score_3d_threshold` | `0.1` | Drop rows below this 3D score (`0` disables) |
+| `save_path` | `None` | If given, save the rendered image |
+| `boxes_2d` | `None` | `(N, 4)` predicted 2D boxes for the green overlay |
+| `draw_predicted_2d_boxes` | `False` | Enable the predicted-2D overlay |
+| `input_boxes` / `input_points` | `None` | User prompt geometry for the red overlay |
+| `draw_prompt` | `False` | Enable the prompt overlay |
 
 ## Batch Inference
 
 ```python
-# Preprocess multiple images
 data_list = [preprocess(img) for img in images]
 
-# Stack into batch
 import torch
 batch_images = torch.stack([d["images"] for d in data_list]).cuda()
 batch_intrinsics = torch.stack([d["intrinsics"] for d in data_list]).cuda()
@@ -205,5 +289,6 @@ results = model(
     original_hw=[d["original_hw"] for d in data_list],
     padding=[d["padding"] for d in data_list],
     input_texts=["car", "person"],
+    # depth_gt=torch.stack([d["depth_gt"][0] for d in data_list]).cuda(),  # include if depth was preprocessed
 )
 ```

@@ -14,6 +14,7 @@ from vis4d.vis.image.canvas import PillowCanvasBackend
 from vis4d.zoo.base import get_default_callbacks_cfg
 
 from wilddet3d.eval.detect3d import Detect3DEvaluator
+from wilddet3d.eval.omni3d import Omni3DEvaluator
 from wilddet3d.vis.image.depth_visualizer import DepthVisualizer
 from configs.base.base_connector import (
     CONN_BBOX_3D_VIS,

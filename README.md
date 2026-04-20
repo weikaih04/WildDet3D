@@ -131,8 +131,8 @@
 ## TODO
 - [x] Release inference code
 - [x] Release WildDet3D-Bench evaluation
+- [x] Release training code
 - [ ] Release evaluation on other benchmarks (Omni3D, Argoverse2, ScanNet)
-- [ ] Release training code
 
 ## Contents
 - [Demo & Applications](#demo--applications)
@@ -142,6 +142,8 @@
 - [Evaluation](#evaluation)
   - [WildDet3D-Bench](#wilddet3d-bench)
   - [WildDet3D-Stereo4D-Bench](#wilddet3d-stereo4d-bench)
+- [Training](#training)
+  - [Training Data Preparation](#training-data-preparation) &rarr; see [docs/TRAINING_DATA.md](docs/TRAINING_DATA.md)
 - [Results](#results)
   - [WildDet3D-Bench (In-the-Wild)](#wilddet3d-bench-in-the-wild)
   - [Omni3D](#omni3d)
@@ -165,12 +167,27 @@ huggingface-cli download allenai/WildDet3D wilddet3d_alldata_all_prompt_v1.0.pt 
 ```bash
 git clone --recurse-submodules https://github.com/allenai/WildDet3D.git
 cd WildDet3D
+# If you forgot --recurse-submodules when cloning:
+# git submodule update --init --recursive
+
+# Training also needs MoGe (loss helpers used by the depth backend); clone it under third_party/:
+# git clone https://github.com/microsoft/moge.git third_party/moge
+
 conda create -n wilddet3d python=3.11 -y
 conda activate wilddet3d
 
+# 1. PyTorch (locked to the tested CUDA / version combination)
 pip install torch==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cu121
+
+# 2. vis4d (pinned to a known-good version; reuses the torch above)
 pip install vis4d==1.0.0
+
+# 3. vis4d CUDA ops (built from source, required by wilddet3d/ops)
 pip install git+https://github.com/SysCV/vis4d_cuda_ops.git --no-build-isolation --no-cache-dir
+
+# 4. Remaining dependencies (includes sam3's transitive deps;
+#    sam3 itself is loaded from third_party/sam3 via sys.path injection
+#    in wilddet3d/__init__.py, no separate install needed)
 pip install -r requirements.txt
 ```
 
@@ -187,6 +204,10 @@ model = build_model(
     checkpoint="ckpt/wilddet3d_alldata_all_prompt_v1.0.pt",
     score_threshold=0.3,
     skip_pretrained=True,
+    # Enable this ONLY if you will pass `depth_gt=...` to `model(...)`
+    # (i.e. you preprocessed the image with `depth=`). Monocular callers
+    # leave it off.
+    # use_depth_input_test=True,
 )
 
 # Load and preprocess image
@@ -199,6 +220,16 @@ data = preprocess(image, intrinsics)
 # Without intrinsics (uses default: focal=max(H,W), principal point at center)
 # data = preprocess(image)
 
+# With a known depth map (e.g., from LiDAR or stereo), pass it through
+# the same preprocess. Depth must be (H, W) float32 in meters at the
+# original image resolution; preprocess resizes + center-pads it to
+# match the model's input_hw (same transforms eval uses).
+#   depth = np.load("depth.npy")  # (H, W) float32, meters
+#   data = preprocess(image, intrinsics, depth=depth)
+# Omit `depth` (or pass None) to let the model use its monocular
+# LingBot-Depth prediction instead. When depth is provided, also pass
+# `depth_gt=data["depth_gt"].cuda()` to each model(...) call below.
+
 # Text prompt: detect all instances of given categories
 results = model(
     images=data["images"].cuda(),
@@ -207,6 +238,7 @@ results = model(
     original_hw=[data["original_hw"]],
     padding=[data["padding"]],
     input_texts=["car", "person", "bicycle"],
+    # depth_gt=data["depth_gt"].cuda(),  # include only if preprocess was called with depth=...
 )
 boxes, boxes3d, scores, scores_2d, scores_3d, class_ids, depth_maps = results
 
@@ -219,6 +251,7 @@ results = model(
     padding=[data["padding"]],
     input_boxes=[[100, 200, 300, 400]],  # pixel xyxy
     prompt_text="geometric",
+    # depth_gt=data["depth_gt"].cuda(),  # include only if preprocess was called with depth=...
 )
 
 # Exemplar prompt: use a 2D box as visual exemplar, find all similar objects (one-to-many)
@@ -230,6 +263,7 @@ results = model(
     padding=[data["padding"]],
     input_boxes=[[100, 200, 300, 400]],
     prompt_text="visual",
+    # depth_gt=data["depth_gt"].cuda(),  # include only if preprocess was called with depth=...
 )
 
 # Point prompt
@@ -241,6 +275,7 @@ results = model(
     padding=[data["padding"]],
     input_points=[[(150, 250, 1), (200, 300, 0)]],  # (x, y, label): 1=positive, 0=negative
     prompt_text="geometric",
+    # depth_gt=data["depth_gt"].cuda(),  # include only if preprocess was called with depth=...
 )
 
 # Visualize results
@@ -254,6 +289,14 @@ draw_3d_boxes(
     class_ids=class_ids[0],
     class_names=["car", "person", "bicycle"],
     save_path="output.png",
+    # Optional debug overlays (both default off):
+    #   predicted 2D boxes (green):
+    # boxes_2d=boxes[0],
+    # draw_predicted_2d_boxes=True,
+    #   user prompt boxes (red) / points (red pos, gray neg):
+    # input_boxes=[[100, 200, 300, 400]],
+    # input_points=[[(150, 250, 1)]],
+    # draw_prompt=True,
 )
 ```
 
@@ -267,9 +310,12 @@ See **[docs/INFERENCE.md](docs/INFERENCE.md)** for the full API reference.
 
 ### WildDet3D-Bench
 
-Download the evaluation data from [allenai/WildDet3D-Data](https://huggingface.co/datasets/allenai/WildDet3D-Data). Evaluate using the [vis4d](https://github.com/SysCV/vis4d) framework:
+Download the evaluation data from [allenai/WildDet3D-Data](https://huggingface.co/datasets/allenai/WildDet3D-Data) (including `InTheWild_v3_val.json` which the eval configs expect at `data/in_the_wild/annotations/`). Evaluate using the [vis4d](https://github.com/SysCV/vis4d) framework:
 
 ```bash
+# Set PYTHONPATH so `configs/` is importable
+export PYTHONPATH=$(pwd):$PYTHONPATH
+
 # Text prompt
 vis4d test --config configs/eval/in_the_wild/text.py --gpus 1 --ckpt ckpt/wilddet3d_alldata_all_prompt_v1.0.pt
 
@@ -292,9 +338,12 @@ vis4d test --config configs/eval/in_the_wild/box_prompt_with_depth.py --gpus 1 -
 
 ### WildDet3D-Stereo4D-Bench
 
-Download the evaluation data from [allenai/WildDet3D-Stereo4D-Bench-Images](https://huggingface.co/datasets/allenai/WildDet3D-Stereo4D-Bench-Images). Evaluate (383 images with real stereo depth):
+Download the evaluation data from [allenai/WildDet3D-Stereo4D-Bench-Images](https://huggingface.co/datasets/allenai/WildDet3D-Stereo4D-Bench-Images) (including `Stereo4D_val.json` / `Stereo4D_test.json` -> `data/in_the_wild/annotations/`). Evaluate (383 images with real stereo depth):
 
 ```bash
+# Set PYTHONPATH so `configs/` is importable
+export PYTHONPATH=$(pwd):$PYTHONPATH
+
 # Text prompt
 vis4d test --config configs/eval/stereo4d/text.py --gpus 1 --ckpt ckpt/wilddet3d_alldata_all_prompt_v1.0.pt
 
@@ -314,6 +363,30 @@ vis4d test --config configs/eval/stereo4d/box_prompt_with_depth.py --gpus 1 --ck
 | Text + Depth | `configs/eval/stereo4d/text_with_depth.py` |
 | Box Prompt | `configs/eval/stereo4d/box_prompt.py` |
 | Box Prompt + Depth | `configs/eval/stereo4d/box_prompt_with_depth.py` |
+
+## Training
+
+WildDet3D is trained in 3 stages. Each stage uses `vis4d fit`:
+
+```bash
+# Set PYTHONPATH so `configs/` is importable
+export PYTHONPATH=$(pwd):$PYTHONPATH
+
+# Stage 1 (12 ep): Omni3D canonical pretraining
+vis4d fit --config configs/training/stage1_omni3d.py --gpus 8
+
+# Stage 2 (12 ep): all-data dense fine-tuning (Omni3D + CA1M + Waymo + 3EED + FoundationPose + ITW-human + V3Det-human), 5-mode collator (no mask)
+vis4d fit --config configs/training/stage2_alldata.py --gpus 8
+
+# Stage 3 (3 ep): high-quality human-reviewed fine-tuning on a mix of box / point / text prompts
+vis4d fit --config configs/training/stage3_mix_box_point_text_ft.py --gpus 8
+```
+
+Multi-node: add `--num_nodes N`. Batch size defaults to 4 samples/GPU (global batch 128 at 8 GPUs × 4 nodes).
+
+### Training Data Preparation
+
+See **[docs/TRAINING_DATA.md](docs/TRAINING_DATA.md)** for per-dataset download + convert + HDF5-pack instructions (Omni3D, CA1M, Waymo v2, 3EED, FoundationPose, ITW, Stereo4D, mask annotations, pretrained checkpoints). All frame-extraction scripts under `scripts/data_prep/` are deterministic, so following the doc reproduces our exact train/val splits.
 
 ## Results
 

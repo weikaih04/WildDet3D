@@ -2,3 +2,10 @@ ckpt/
 __pycache__/
 *.pyc
 vis4d-workspace/
+
+# Local-only data + pretrained (users bring their own)
+data/
+pretrained/
+
+# Optional MoGe submodule location (see README installation)
+third_party/moge/

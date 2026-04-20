@@ -71,6 +71,56 @@ from wilddet3d.head import Det3DCoder, RoI2Det3D
 from wilddet3d.model import WildDet3D
 
 
+def _orig_to_input_hw_box(
+    box: List[float],
+    original_hw: Tuple[int, int],
+    padding: Tuple[int, int, int, int],
+    input_hw: Tuple[int, int],
+) -> List[float]:
+    """Convert user-supplied pixel xyxy box (original image space) into
+    the input_hw (resize + center pad) pixel space the model expects."""
+    x1, y1, x2, y2 = box
+    orig_h, orig_w = original_hw
+    pad_l, pad_r, pad_t, pad_b = padding
+    ihw_h, ihw_w = input_hw
+    padded_w = ihw_w - pad_l - pad_r
+    padded_h = ihw_h - pad_t - pad_b
+    sx = padded_w / orig_w
+    sy = padded_h / orig_h
+    return [x1 * sx + pad_l, y1 * sy + pad_t, x2 * sx + pad_l, y2 * sy + pad_t]
+
+
+def _orig_to_input_hw_point(
+    point: Tuple[float, float, int],
+    original_hw: Tuple[int, int],
+    padding: Tuple[int, int, int, int],
+    input_hw: Tuple[int, int],
+) -> Tuple[float, float, int]:
+    """Convert user-supplied (x, y, label) from original image space to
+    input_hw pixel space."""
+    x, y, label = point
+    orig_h, orig_w = original_hw
+    pad_l, pad_r, pad_t, pad_b = padding
+    ihw_h, ihw_w = input_hw
+    padded_w = ihw_w - pad_l - pad_r
+    padded_h = ihw_h - pad_t - pad_b
+    return (x * padded_w / orig_w + pad_l, y * padded_h / orig_h + pad_t, label)
+
+
+def _pairwise_iou(boxes_a: Tensor, boxes_b: Tensor) -> Tensor:
+    """Pairwise 2D IoU in pixel xyxy. Returns (N_a, N_b)."""
+    a_wh = (boxes_a[:, 2:] - boxes_a[:, :2]).clamp(min=0)
+    b_wh = (boxes_b[:, 2:] - boxes_b[:, :2]).clamp(min=0)
+    a_area = (a_wh[:, 0] * a_wh[:, 1])[:, None]
+    b_area = (b_wh[:, 0] * b_wh[:, 1])[None, :]
+    lt = torch.maximum(boxes_a[:, None, :2], boxes_b[None, :, :2])
+    rb = torch.minimum(boxes_a[:, None, 2:], boxes_b[None, :, 2:])
+    inter_wh = (rb - lt).clamp(min=0)
+    inter = inter_wh[..., 0] * inter_wh[..., 1]
+    union = a_area + b_area - inter
+    return inter / union.clamp(min=1e-8)
+
+
 class WildDet3DPredictor(nn.Module):
     """WildDet3D wrapper with a simple forward() interface.
 
@@ -86,10 +136,16 @@ class WildDet3DPredictor(nn.Module):
         self,
         wilddet3d: WildDet3D,
         score_threshold: float = 0.3,
+        score_3d_threshold: float = 0.1,
     ):
         super().__init__()
         self.wilddet3d = wilddet3d
+        # 2D classification score floor (applied to `scores`, which the
+        # model already combines with 3D confidence).
         self.score_threshold = score_threshold
+        # Additional floor on the standalone 3D confidence so very
+        # uncertain 3D boxes can't slip through on a strong 2D score.
+        self.score_3d_threshold = score_3d_threshold
 
     def forward(
         self,
@@ -109,7 +165,10 @@ class WildDet3DPredictor(nn.Module):
         prompt_text: str = "object",
         return_predicted_intrinsics: bool = False,
         # Optional depth input (e.g., from LiDAR)
-        depth_gt: Optional[Tensor] = None,  # (B, 1, H, W) meters
+        # Optional depth input (meters) already preprocessed to match
+        # the model's input_hw. Use the tensor returned under
+        # `data["depth_gt"]` by `preprocess(image, intrinsics, depth=...)`.
+        depth_gt: Optional[Tensor] = None,
     ) -> Tuple[
         List[Tensor],
         List[Tensor],
@@ -152,6 +211,26 @@ class WildDet3DPredictor(nn.Module):
         B = images.shape[0]
         H, W = input_hw[0]
 
+        # User supplies pixel coords in the *original* image. Convert to the
+        # model's input_hw (resize + center pad) space so downstream
+        # normalization and IoU-based filtering stay consistent with the
+        # inverse rescale applied to the output boxes below.
+        input_boxes_model = None
+        if input_boxes is not None:
+            input_boxes_model = [
+                _orig_to_input_hw_box(box, original_hw[i], padding[i], (H, W))
+                for i, box in enumerate(input_boxes)
+            ]
+        input_points_model = None
+        if input_points is not None:
+            input_points_model = [
+                [
+                    _orig_to_input_hw_point(p, original_hw[i], padding[i], (H, W))
+                    for p in pts
+                ]
+                for i, pts in enumerate(input_points)
+            ]
+
         # Determine prompt type and create batch
         if input_texts is not None:
             batch = self._create_text_batch(
@@ -166,7 +245,7 @@ class WildDet3DPredictor(nn.Module):
             batch = self._create_box_batch(
                 images,
                 intrinsics,
-                input_boxes,
+                input_boxes_model,
                 (H, W),
                 device,
                 text=prompt_text,
@@ -177,7 +256,7 @@ class WildDet3DPredictor(nn.Module):
             batch = self._create_point_batch(
                 images,
                 intrinsics,
-                input_points,
+                input_points_model,
                 (H, W),
                 device,
                 text=prompt_text,
@@ -207,6 +286,16 @@ class WildDet3DPredictor(nn.Module):
         class_ids = output.class_ids
         depth_maps = output.depth_maps
 
+        # Geometric mode returns exactly 1 prediction per input prompt.
+        #   Box prompt : top-10 proposals by IoU with the prompt box,
+        #                then argmax score within those 10.
+        #   Point prompt: rank proposals by (#positive points inside,
+        #                 score) and take the top one.
+        # Visual / text modes fall through to the score-threshold filter.
+        is_geometric = prompt_text.startswith("geometric")
+        is_geometric_box = is_geometric and input_boxes is not None
+        is_geometric_point = is_geometric and input_points is not None
+
         # Apply score threshold and rescale boxes to original size
         boxes_out = []
         boxes3d_out = []
@@ -216,22 +305,105 @@ class WildDet3DPredictor(nn.Module):
         class_ids_out = []
 
         for i in range(B):
-            # Filter by 2D score
-            mask = scores[i] >= self.score_threshold
-            img_scores = scores[i][mask]
-            img_scores_2d = (
-                scores_2d[i][mask]
-                if scores_2d is not None
-                else torch.zeros_like(img_scores)
-            )
-            img_scores_3d = (
-                scores_3d[i][mask]
-                if scores_3d is not None
-                else torch.zeros_like(img_scores)
-            )
-            img_boxes = boxes[i][mask]
-            img_boxes3d = boxes3d[i][mask]
-            img_class_ids = class_ids[i][mask]
+            if is_geometric_box:
+                # Top-10 by IoU with the i-th prompt box, then argmax score.
+                # If nothing overlaps the prompt at all, fall back to the
+                # overall argmax score so we still return something.
+                # `boxes[i]` is still in input_hw pixel space here (rescale
+                # to original_hw happens below), so compare against the
+                # transformed prompt box, not the user-supplied original.
+                prompt_box = torch.tensor(
+                    input_boxes_model[i],
+                    dtype=torch.float32,
+                    device=scores[i].device,
+                )
+                ious = _pairwise_iou(boxes[i], prompt_box.unsqueeze(0)).squeeze(-1)
+                if ious.max() <= 0:
+                    best = scores[i].argmax().unsqueeze(0)
+                else:
+                    topk = min(10, ious.numel())
+                    _, topk_idx = ious.topk(topk)
+                    best = topk_idx[scores[i][topk_idx].argmax()].unsqueeze(0)
+                img_scores = scores[i][best]
+                img_scores_2d = (
+                    scores_2d[i][best]
+                    if scores_2d is not None
+                    else torch.zeros_like(img_scores)
+                )
+                img_scores_3d = (
+                    scores_3d[i][best]
+                    if scores_3d is not None
+                    else torch.zeros_like(img_scores)
+                )
+                img_boxes = boxes[i][best]
+                img_boxes3d = boxes3d[i][best]
+                img_class_ids = class_ids[i][best]
+            elif is_geometric_point:
+                # Pick the pred whose box contains the most positive points,
+                # tie-break by score. Use the transformed (input_hw-space)
+                # points so they match the input_hw-space pred boxes.
+                pos_xy = [
+                    (x, y) for (x, y, lbl) in input_points_model[i] if lbl == 1
+                ]
+                if not pos_xy:
+                    # No positive cue -- fall back to argmax score.
+                    best = scores[i].argmax().unsqueeze(0)
+                else:
+                    pos = torch.tensor(
+                        pos_xy,
+                        dtype=torch.float32,
+                        device=boxes[i].device,
+                    )
+                    x1, y1, x2, y2 = boxes[i].unbind(-1)
+                    inside = (
+                        (pos[:, 0][None, :] >= x1[:, None])
+                        & (pos[:, 0][None, :] <= x2[:, None])
+                        & (pos[:, 1][None, :] >= y1[:, None])
+                        & (pos[:, 1][None, :] <= y2[:, None])
+                    )
+                    n_inside = inside.sum(dim=1).float()
+                    if n_inside.max() <= 0:
+                        # No pred contains any positive point -- fall back.
+                        best = scores[i].argmax().unsqueeze(0)
+                    else:
+                        # Rank: (#positives inside) dominates, score breaks ties.
+                        # Normalize score to [0, 1) so it stays sub-integer.
+                        combined = n_inside + scores[i].clamp(0, 1) * 0.999
+                        best = combined.argmax().unsqueeze(0)
+                img_scores = scores[i][best]
+                img_scores_2d = (
+                    scores_2d[i][best]
+                    if scores_2d is not None
+                    else torch.zeros_like(img_scores)
+                )
+                img_scores_3d = (
+                    scores_3d[i][best]
+                    if scores_3d is not None
+                    else torch.zeros_like(img_scores)
+                )
+                img_boxes = boxes[i][best]
+                img_boxes3d = boxes3d[i][best]
+                img_class_ids = class_ids[i][best]
+            else:
+                # Filter by 2D score (text + visual prompts) and,
+                # when available, also by standalone 3D confidence.
+                mask = scores[i] >= self.score_threshold
+                if scores_3d is not None and self.score_3d_threshold > 0:
+                    mask = mask & (scores_3d[i] >= self.score_3d_threshold)
+                img_scores = scores[i][mask]
+                img_scores_2d = (
+                    scores_2d[i][mask]
+                    if scores_2d is not None
+                    else torch.zeros_like(img_scores)
+                )
+                img_scores_3d = (
+                    scores_3d[i][mask]
+                    if scores_3d is not None
+                    else torch.zeros_like(img_scores)
+                )
+                img_boxes = boxes[i][mask]
+                img_boxes3d = boxes3d[i][mask]
+                img_class_ids = class_ids[i][mask]
 
             # Rescale 2D boxes from input_hw to original_hw
             # Account for padding
@@ -432,6 +604,7 @@ def build_model(
     checkpoint: str,
     sam3_checkpoint: str = "pretrained/sam3/sam3_detector.pt",
     score_threshold: float = 0.3,
+    score_3d_threshold: float = 0.1,
     nms: bool = True,
     iou_threshold: float = 0.6,
     device: str = "cuda",
@@ -599,7 +772,9 @@ def build_model(
 
     # Wrap with predictor interface
     model = WildDet3DPredictor(
-        wilddet3d, score_threshold=score_threshold
+        wilddet3d,
+        score_threshold=score_threshold,
+        score_3d_threshold=score_3d_threshold
     )
     model = model.to(device)
     model.eval()

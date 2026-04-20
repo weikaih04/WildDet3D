@@ -119,4 +119,21 @@ data/
 └── in_the_wild/               # WildDet3D in-the-wild annotations
 ```
 
-<!-- TODO: Add data preparation scripts and download links -->
+### In-the-Wild / Stereo4D eval annotations
+
+These aren't checked into the repo; grab them from HuggingFace before running the corresponding eval config:
+
+```bash
+mkdir -p data/in_the_wild/annotations
+# In-the-Wild v3 val
+wget https://huggingface.co/datasets/allenai/WildDet3D-Data/resolve/main/annotations/InTheWild_v3_val.json \
+    -O data/in_the_wild/annotations/InTheWild_v3_val.json
+
+# Stereo4D val + test
+wget https://huggingface.co/datasets/allenai/WildDet3D-Stereo4D-Bench-Images/resolve/main/annotations/Stereo4D_val.json \
+    -O data/in_the_wild/annotations/Stereo4D_val.json
+wget https://huggingface.co/datasets/allenai/WildDet3D-Stereo4D-Bench-Images/resolve/main/annotations/Stereo4D_test.json \
+    -O data/in_the_wild/annotations/Stereo4D_test.json
+```
+
+The small `*_class_map.json` files are already in the repo. See [TRAINING_DATA.md](TRAINING_DATA.md) for Omni3D / ScanNet / Argoverse 2 eval data (via 3D-MOOD's `docs/DATA.md`).

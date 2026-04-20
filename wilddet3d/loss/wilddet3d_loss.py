@@ -1036,7 +1036,7 @@ class WildDet3DLoss(nn.Module):
 
             # 2. 3D IoU using safe shapely-based implementation
             #    (CPU, full rotation support, never crashes)
-            from wilddet3d.ops.iou_box3d import batch_box3d_iou
+            from wilddet3d.ops.iou_3d_safe import batch_box3d_iou
 
             H, W = image_size
             factors = pred_boxes_2d.new_tensor([[W, H, W, H]])

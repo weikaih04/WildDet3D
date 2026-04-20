@@ -79,7 +79,14 @@ def draw_3d_boxes(
     n_colors: int = 50,
     score_format: str = "{name} 2D:{s2d:.2f} 3D:{s3d:.2f}",
     near_clip: float = 0.15,
+    score_2d_threshold: float = 0.3,
+    score_3d_threshold: float = 0.1,
     save_path: str | None = None,
+    boxes_2d: Tensor | np.ndarray | None = None,
+    draw_predicted_2d_boxes: bool = False,
+    input_boxes: list[list[float]] | None = None,
+    input_points: list[list[tuple[float, float, int]]] | None = None,
+    draw_prompt: bool = False,
 ) -> Image.Image:
     """Draw anti-aliased 3D bounding boxes with 2D/3D score labels.
 
@@ -96,7 +103,20 @@ def draw_3d_boxes(
         n_colors: Number of colors in palette.
         score_format: Format string. Available: {name}, {s2d}, {s3d}.
         near_clip: Camera near clipping plane.
+        score_2d_threshold: Only draw boxes with 2D score >= this
+            (default 0.3; set 0.0 to disable). Requires scores_2d.
+        score_3d_threshold: Only draw boxes with 3D score >= this
+            (default 0.1; set 0.0 to disable). Requires scores_3d.
         save_path: If provided, save the result.
+        boxes_2d: Model-predicted 2D boxes (N, 4) in pixel xyxy; drawn
+            in green when draw_predicted_2d_boxes=True.
+        draw_predicted_2d_boxes: Overlay predicted 2D boxes. Default False.
+        input_boxes: User prompt boxes (list of [x1,y1,x2,y2] in
+            original-image pixels); drawn in red when draw_prompt=True.
+        input_points: User prompt points (list of list of
+            (x, y, label)); drawn in red (positive) / gray (negative)
+            when draw_prompt=True.
+        draw_prompt: Overlay user prompt boxes / points. Default False.
 
     Returns:
         PIL Image with drawn boxes and score labels.
@@ -115,6 +135,31 @@ def draw_3d_boxes(
         scores_3d = scores_3d.cpu().numpy()
     if isinstance(class_ids, Tensor):
         class_ids = class_ids.cpu().numpy()
+    boxes_2d_np = None
+    if boxes_2d is not None:
+        boxes_2d_np = (
+            boxes_2d.cpu().numpy()
+            if isinstance(boxes_2d, Tensor)
+            else np.asarray(boxes_2d)
+        )
+
+    # Drop boxes below the 2D / 3D score floors.
+    keep = np.ones(len(boxes3d_t), dtype=bool)
+    if scores_2d is not None and score_2d_threshold > 0:
+        keep &= np.asarray(scores_2d) >= score_2d_threshold
+    if scores_3d is not None and score_3d_threshold > 0:
+        keep &= np.asarray(scores_3d) >= score_3d_threshold
+    if not keep.all():
+        keep_t = torch.from_numpy(keep)
+        boxes3d_t = boxes3d_t[keep_t]
+        if scores_2d is not None:
+            scores_2d = np.asarray(scores_2d)[keep]
+        if scores_3d is not None:
+            scores_3d = np.asarray(scores_3d)[keep]
+        if class_ids is not None:
+            class_ids = np.asarray(class_ids)[keep]
+        if boxes_2d_np is not None:
+            boxes_2d_np = boxes_2d_np[keep]
 
     N = len(boxes3d_t)
     H, W = image.shape[:2]
@@ -254,6 +299,26 @@ def draw_3d_boxes(
 
     # Composite overlay onto main image
     pil_img = Image.alpha_composite(pil_img, overlay).convert("RGB")
+
+    # Optional overlays.
+    if (draw_predicted_2d_boxes and boxes_2d_np is not None) or (
+        draw_prompt and (input_boxes is not None or input_points is not None)
+    ):
+        annot = ImageDraw.Draw(pil_img)
+        if draw_predicted_2d_boxes and boxes_2d_np is not None:
+            for box in boxes_2d_np.tolist():
+                annot.rectangle(list(box), outline=(0, 200, 0), width=2)
+        if draw_prompt and input_boxes is not None:
+            for box in input_boxes:
+                annot.rectangle(list(box), outline=(255, 0, 0), width=3)
+        if draw_prompt and input_points is not None:
+            for pts in input_points:
+                for (px, py, lbl) in pts:
+                    color = (255, 0, 0) if lbl == 1 else (128, 128, 128)
+                    annot.ellipse(
+                        [px - 6, py - 6, px + 6, py + 6],
+                        outline=color, fill=color, width=2,
+                    )
 
     if save_path:
         pil_img.save(save_path, quality=95)

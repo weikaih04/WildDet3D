@@ -312,6 +312,10 @@ See **[docs/INFERENCE.md](docs/INFERENCE.md)** for the full API reference.
 
 Download the evaluation data from [allenai/WildDet3D-Data](https://huggingface.co/datasets/allenai/WildDet3D-Data) (including `InTheWild_v3_val.json` which the eval configs expect at `data/in_the_wild/annotations/`). Evaluate using the [vis4d](https://github.com/SysCV/vis4d) framework:
 
+Third-party image data for WildDet3D, only for personal/academic use, do not redistribute! [download here](https://huggingface.co/collections/weikaih/wilddet3d-images).
+
+
+
 ```bash
 # Set PYTHONPATH so `configs/` is importable
 export PYTHONPATH=$(pwd):$PYTHONPATH
@@ -387,6 +391,8 @@ Multi-node: add `--num_nodes N`. Batch size defaults to 4 samples/GPU (global ba
 ### Training Data Preparation
 
 See **[docs/TRAINING_DATA.md](docs/TRAINING_DATA.md)** for per-dataset download + convert + HDF5-pack instructions (Omni3D, CA1M, Waymo v2, 3EED, FoundationPose, ITW, Stereo4D, mask annotations, pretrained checkpoints). All frame-extraction scripts under `scripts/data_prep/` are deterministic, so following the doc reproduces our exact train/val splits.
+
+Third-party image data for WildDet3D, only for personal/academic use, do not redistribute! [download here](https://huggingface.co/collections/weikaih/wilddet3d-images).
 
 ## Results
 

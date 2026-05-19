@@ -139,6 +139,19 @@
 <br><a href="demo/boxer/README.md">README</a>
 </td>
 </tr>
+<tr><td colspan="2"></td></tr>
+<tr>
+<td align="center" colspan="2">
+<a href="demo/embodied/README.md"><img src="assets/demo_embodied.png" height="200"></a>
+</td>
+</tr>
+<tr>
+<td align="center" colspan="2">
+<b>Embodied 3D Detection on DROID</b>
+<br>WildDet3D-Embodied: Stage 4 finetune on <a href="https://droid-dataset.github.io/">DROID</a> robot-manipulation episodes (wrist + ext1 + ext2 views). Includes the 4-mode DROID eval benchmark, conversion pipeline, training recipe, and triple-camera renderer.
+<br><a href="demo/embodied/README.md">README</a>
+</td>
+</tr>
 </table>
 
 ## TODO

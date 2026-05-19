@@ -788,11 +788,18 @@ class Detect3DEvaluator(Evaluator):
                 # Fallback when terminaltables is not installed.
                 log_str = f"\n(per-class table omitted; install terminaltables for pretty output)\n{log_str}"
 
-        if self.base_classes is not None:
-            score_dict[f"{main_metric}_Base"] = np.mean(score_base_list).item()
-            score_dict[f"{main_metric}_Novel"] = np.mean(
-                score_novel_list
-            ).item()
+        # Base/Novel split is only meaningful for 3D metric (the 2D metric
+        # branch never assigns `main_metric`). Use nanmean so cats with no
+        # GT instances (NaN AP) don't poison the aggregate.
+        if self.base_classes is not None and metric == "3D":
+            score_dict[f"{main_metric}_Base"] = (
+                float(np.nanmean(score_base_list))
+                if score_base_list else float("nan")
+            )
+            score_dict[f"{main_metric}_Novel"] = (
+                float(np.nanmean(score_novel_list))
+                if score_novel_list else float("nan")
+            )
 
         if self.cat_freq_group is not None and self.per_class_eval:
             score_dict["APr"] = np.mean(freq_ap["rare"]).item() if freq_ap["rare"] else float("nan")

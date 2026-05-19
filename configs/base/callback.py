@@ -15,6 +15,7 @@ from vis4d.zoo.base import get_default_callbacks_cfg
 
 from wilddet3d.eval.detect3d import Detect3DEvaluator
 from wilddet3d.eval.omni3d import Omni3DEvaluator
+from wilddet3d.eval.open import OpenDetect3DEvaluator
 from wilddet3d.vis.image.depth_visualizer import DepthVisualizer
 from configs.base.base_connector import (
     CONN_BBOX_3D_VIS,
@@ -71,6 +72,8 @@ def get_callback_cfg(
                 evaluators.append(get_scannet_evaluator_cfg())
             elif dataset == "LabelAny3D_COCO_val":
                 evaluators.append(get_labelany3d_coco_evaluator_cfg())
+            elif dataset == "DROID_val":
+                evaluators.append(get_droid_evaluator_cfg())
             else:
                 raise ValueError(
                     f"Unknown dataset {dataset} for open evaluation."
@@ -581,3 +584,103 @@ def get_visualizer_callback_cfg(
         )
 
     return callbacks
+
+
+def get_droid_evaluator_cfg(
+    data_root: str = "data/droid",
+    iou_type: str = "bbox",
+) -> ConfigDict:
+    """Get DROID evaluator config.
+
+    Uses the unified val annotation (DROID_val_unified.json) which collapses
+    color/material/compound-noun variants to their head noun (210->146 cats).
+
+    Reports a Base/Novel split:
+      - Base = the 45 single-word "frequent target" categories used as
+               unification heads (>=50 samples in train+val combined).
+      - Novel = the long-tail rare/normal categories (everything else).
+    Re-derives the base set from the raw annotations (same logic as
+    `scripts/data_prep/droid/build_unified_val.py`).
+    """
+    import json
+    from collections import Counter
+
+    from wilddet3d.data.datasets.droid import (
+        get_droid_class_map,
+        get_droid_det_map,
+    )
+
+    eval_name = "DROID_val_unified"
+    det_map = get_droid_det_map(eval_name, data_root=data_root)
+    cat_map = get_droid_class_map(eval_name, data_root=data_root)
+
+    base_freq_threshold = 50
+    raw_cnt = Counter()
+    for split in ("train", "val"):
+        with open(
+            os.path.join(data_root, "annotations", f"DROID_{split}.json")
+        ) as f:
+            d = json.load(f)
+        for ann in d["annotations"]:
+            raw_cnt[ann["category_name"]] += 1
+    base_classes = sorted(
+        c for c, n in raw_cnt.items()
+        if n >= base_freq_threshold and " " not in c
+    )
+
+    return class_config(
+        Detect3DEvaluator,
+        det_map=det_map,
+        cat_map=cat_map,
+        eval_prox=True,
+        iou_type=iou_type,
+        num_columns=2,
+        annotation=os.path.join(
+            data_root, "annotations", f"{eval_name}.json"
+        ),
+        base_classes=base_classes,
+    )
+
+
+def get_droid_eval_callbacks(
+    data_root: str = "data/droid",
+    output_dir: FieldReference | str = "",
+    eval_connector_mapping: dict | None = None,
+    test_connector: ConfigDict | None = None,
+) -> list[ConfigDict]:
+    """Get DROID evaluation callbacks: 2D + 3D AP (bbox) and 3D AP (dist)."""
+    if test_connector is None:
+        if eval_connector_mapping is None:
+            eval_connector_mapping = CONN_COCO_DET3D_EVAL
+        test_connector = class_config(
+            CallbackConnector, key_mapping=eval_connector_mapping
+        )
+
+    cbs = []
+    cbs.append(
+        class_config(
+            EvaluatorCallback,
+            evaluator=get_droid_evaluator_cfg(
+                data_root=data_root, iou_type="bbox"
+            ),
+            metrics_to_eval=["2D", "3D"],
+            save_predictions=True,
+            output_dir=output_dir,
+            save_prefix="droid_bbox",
+            test_connector=test_connector,
+        )
+    )
+    cbs.append(
+        class_config(
+            EvaluatorCallback,
+            evaluator=get_droid_evaluator_cfg(
+                data_root=data_root, iou_type="dist"
+            ),
+            metrics_to_eval=["3D"],
+            save_predictions=True,
+            output_dir=output_dir,
+            save_prefix="droid_dist",
+            test_connector=test_connector,
+        )
+    )
+    return cbs
